@@ -7,11 +7,11 @@ import org.apache.spark.sql.SaveMode;
 import org.apache.spark.sql.SparkSession;
 
 /**
- * 加载和保存数据
+ * 加载和保存数据 -- 文件
  */
-public class RWDemo1 {
+public class RWFile {
     public static void main(String[] args) {
-        SparkConf conf = new SparkConf().setMaster("local[*]").setAppName("RWDemo1");
+        SparkConf conf = new SparkConf().setMaster("local[*]").setAppName("RWFile");
         SparkSession sparkSession = SparkSession.builder().config(conf).getOrCreate();
         // 1. SparkSQL 默认读取和保存的文件格式为 parquet
 //        Dataset<Row> df1 = sparkSession.read().load("src/main/resources/users.parquet");

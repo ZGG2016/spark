@@ -10,9 +10,9 @@ import java.util.Properties;
 /**
  * 加载和保存数据 -- JDBC
  */
-public class RWDemo2 {
+public class RWJDBC {
     public static void main(String[] args) {
-        SparkConf conf = new SparkConf().setMaster("local[*]").setAppName("RWDemo2");
+        SparkConf conf = new SparkConf().setMaster("local[*]").setAppName("RWJDBC");
         SparkSession sparkSession = SparkSession.builder().config(conf).getOrCreate();
         /*
             先添加mysql依赖
