@@ -1,1 +1,1 @@
-Apache Spark
+Spark
