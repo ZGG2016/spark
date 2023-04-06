@@ -1,0 +1,145 @@
+【从下往上看】【注意比较不同计划间的差别】
+
+============================explain(mode = "extended")-展示逻辑和物理执行计划==============================
+【Parser 组件检查 SQL 语法上是否有问题，然后生成 Unresolved（未决断）的逻辑计划，不检查表名、不检查列名】
+【sql语句结构的解析】
+== Parsed Logical Plan == 【初步解析出来一个逻辑计划】
+【得到了sql里的 groupby 子句和 select 子句】
+'Aggregate ['sc.courseid, 'sc.coursename], ['sc.courseid, 'sc.coursename, 'sum('sellmoney) AS totalsell#40]
+   【得到了sql里的on子句】
++- 'Join Inner, ((('sc.courseid = 'csc.courseid) AND ('sc.dt = 'csc.dt)) AND ('sc.dn = 'csc.dn))
+   :- 'SubqueryAlias sc 【sql里的from子句，简单地得到表名及其别名】
+   :  +- 'UnresolvedRelation [sale_course], [], false
+   +- 'SubqueryAlias csc
+      +- 'UnresolvedRelation [course_shopping_cart], [], false
+
+【通过访问 Spark 中的 Catalog 存储库来解析验证语义、列名、类型、表名等】
+== Analyzed Logical Plan ==
+【得到输出字段及其类型】
+courseid: bigint, coursename: string, totalsell: double
+【聚合，即sum】【groupby 子句和 select 子句】【这里就使用字段编号来表示；在sum里做类型转换了】
+Aggregate [courseid#3L, coursename#5], [courseid#3L, coursename#5, sum(cast(sellmoney#22 as double)) AS totalsell#40]
+   【join】【on子句】【这里就使用字段编号来表示】
++- Join Inner, (((courseid#3L = courseid#17L) AND (dt#15 = dt#23)) AND (dn#16 = dn#24))
+      【这里得到了表所属的数据库、所属catalog，及其表字段，给两张表的字段依次编号了，后面的L是类型Long】
+   :- SubqueryAlias sc
+   :  +- SubqueryAlias spark_catalog.sparktuning.sale_course
+   :     +- Relation sparktuning.sale_course[chapterid#1L,chaptername#2,courseid#3L,coursemanager#4,coursename#5,edusubjectid#6L,edusubjectname#7,majorid#8L,majorname#9,money#10,pointlistid#11L,status#12,teacherid#13L,teachername#14,dt#15,dn#16] parquet
+   +- SubqueryAlias csc
+      +- SubqueryAlias spark_catalog.sparktuning.course_shopping_cart
+         +- Relation sparktuning.course_shopping_cart[courseid#17L,coursename#18,createtime#19,discount#20,orderid#21,sellmoney#22,dt#23,dn#24] parquet
+
+【Catalyst 优化器根据各种规则进行优化】
+== Optimized Logical Plan ==
+【聚合，即sum】
+Aggregate [courseid#3L, coursename#5], [courseid#3L, coursename#5, sum(cast(sellmoney#22 as double)) AS totalsell#40]
+   【join后，选出将使用的列】
++- Project [courseid#3L, coursename#5, sellmoney#22]
+      【join】
+   +- Join Inner, (((courseid#3L = courseid#17L) AND (dt#15 = dt#23)) AND (dn#16 = dn#24))
+         【选出将使用的列】
+      :- Project [courseid#3L, coursename#5, dt#15, dn#16]
+            【做了过滤】
+      :  +- Filter ((isnotnull(courseid#3L) AND isnotnull(dt#15)) AND isnotnull(dn#16))
+      :     +- Relation sparktuning.sale_course[chapterid#1L,chaptername#2,courseid#3L,coursemanager#4,coursename#5,edusubjectid#6L,edusubjectname#7,majorid#8L,majorname#9,money#10,pointlistid#11L,status#12,teacherid#13L,teachername#14,dt#15,dn#16] parquet
+      +- Project [courseid#17L, sellmoney#22, dt#23, dn#24]
+         +- Filter ((isnotnull(courseid#17L) AND isnotnull(dt#23)) AND isnotnull(dn#24))
+            +- Relation sparktuning.course_shopping_cart[courseid#17L,coursename#18,createtime#19,discount#20,orderid#21,sellmoney#22,dt#23,dn#24] parquet
+
+== Physical Plan ==
+AdaptiveSparkPlan isFinalPlan=false
+   【数据聚合，分区间聚合】
++- HashAggregate(keys=[courseid#3L, coursename#5], functions=[sum(cast(sellmoney#22 as double))], output=[courseid#3L, coursename#5, totalsell#40])
+      【shuffle，表示需要在集群上移动数据。很多时候HashAggregate 会以 Exchange 分隔开来】
+   +- Exchange hashpartitioning(courseid#3L, coursename#5, 200), ENSURE_REQUIREMENTS, [id=#127]
+         【数据聚合，本地局部聚合】
+      +- HashAggregate(keys=[courseid#3L, coursename#5], functions=[partial_sum(cast(sellmoney#22 as double))], output=[courseid#3L, coursename#5, sum#46])
+            【join后，选出将使用的列】
+         +- Project [courseid#3L, coursename#5, sellmoney#22]
+               【通过基于广播方式进行 HashJoin】
+            +- BroadcastHashJoin [courseid#3L, dt#15, dn#16], [courseid#17L, dt#23, dn#24], Inner, BuildLeft, false
+                  【将小表广播】
+               :- BroadcastExchange HashedRelationBroadcastMode(List(input[0, bigint, false], input[2, string, true], input[3, string, true]),false), [id=#122]
+                     【过滤】
+               :  +- Filter isnotnull(courseid#3L)
+                        【扫描、读取数据文件 sale_course 这是个小表（第一步）】
+               :     +- FileScan parquet sparktuning.sale_course[courseid#3L,coursename#5,dt#15,dn#16] Batched: true, DataFilters: [isnotnull(courseid#3L)], Format: Parquet, Location: InMemoryFileIndex(1 paths)[hdfs://bigdata101:9000/user/hive/warehouse/sparktuning.db/sale_course/..., PartitionFilters: [isnotnull(dt#15), isnotnull(dn#16)], PushedFilters: [IsNotNull(courseid)], ReadSchema: struct<courseid:bigint,coursename:string>
+                  【过滤】
+               +- Filter isnotnull(courseid#17L)
+                     【扫描、读取数据文件 course_shopping_cart 这是个大表】
+                  +- FileScan parquet sparktuning.course_shopping_cart[courseid#17L,sellmoney#22,dt#23,dn#24] Batched: true, DataFilters: [isnotnull(courseid#17L)], Format: Parquet, Location: InMemoryFileIndex(1 paths)[hdfs://bigdata101:9000/user/hive/warehouse/sparktuning.db/course_shopp..., PartitionFilters: [isnotnull(dt#23), isnotnull(dn#24)], PushedFilters: [IsNotNull(courseid)], ReadSchema: struct<courseid:bigint,sellmoney:string>
+
+
+============================explain(mode = "formatted")-展示格式化的物理执行计划=============================
+== Physical Plan ==
+AdaptiveSparkPlan (11)
++- HashAggregate (10)
+   +- Exchange (9)
+      +- HashAggregate (8)
+         +- Project (7)
+            +- BroadcastHashJoin Inner BuildLeft (6)
+               :- BroadcastExchange (3)
+               :  +- Filter (2)
+               :     +- Scan parquet sparktuning.sale_course (1)
+               +- Filter (5)
+                  +- Scan parquet sparktuning.course_shopping_cart (4)
+
+
+(1) Scan parquet sparktuning.sale_course
+Output [4]: [courseid#3L, coursename#5, dt#15, dn#16]
+Batched: true
+Location: InMemoryFileIndex [hdfs://bigdata101:9000/user/hive/warehouse/sparktuning.db/sale_course/dt=20190722/dn=webA]
+PartitionFilters: [isnotnull(dt#15), isnotnull(dn#16)]
+PushedFilters: [IsNotNull(courseid)]
+ReadSchema: struct<courseid:bigint,coursename:string>
+
+(2) Filter
+Input [4]: [courseid#3L, coursename#5, dt#15, dn#16]
+Condition : isnotnull(courseid#3L)
+
+(3) BroadcastExchange
+Input [4]: [courseid#3L, coursename#5, dt#15, dn#16]
+Arguments: HashedRelationBroadcastMode(List(input[0, bigint, false], input[2, string, true], input[3, string, true]),false), [id=#206]
+
+(4) Scan parquet sparktuning.course_shopping_cart
+Output [4]: [courseid#17L, sellmoney#22, dt#23, dn#24]
+Batched: true
+Location: InMemoryFileIndex [hdfs://bigdata101:9000/user/hive/warehouse/sparktuning.db/course_shopping_cart/dt=20190722/dn=webA]
+PartitionFilters: [isnotnull(dt#23), isnotnull(dn#24)]
+PushedFilters: [IsNotNull(courseid)]
+ReadSchema: struct<courseid:bigint,sellmoney:string>
+
+(5) Filter
+Input [4]: [courseid#17L, sellmoney#22, dt#23, dn#24]
+Condition : isnotnull(courseid#17L)
+
+(6) BroadcastHashJoin
+Left keys [3]: [courseid#3L, dt#15, dn#16]
+Right keys [3]: [courseid#17L, dt#23, dn#24]
+Join condition: None
+
+(7) Project
+Output [3]: [courseid#3L, coursename#5, sellmoney#22]
+Input [8]: [courseid#3L, coursename#5, dt#15, dn#16, courseid#17L, sellmoney#22, dt#23, dn#24]
+
+(8) HashAggregate
+Input [3]: [courseid#3L, coursename#5, sellmoney#22]
+Keys [2]: [courseid#3L, coursename#5]
+Functions [1]: [partial_sum(cast(sellmoney#22 as double))]
+Aggregate Attributes [1]: [sum#59]
+Results [3]: [courseid#3L, coursename#5, sum#60]
+
+(9) Exchange
+Input [3]: [courseid#3L, coursename#5, sum#60]
+Arguments: hashpartitioning(courseid#3L, coursename#5, 200), ENSURE_REQUIREMENTS, [id=#211]
+
+(10) HashAggregate
+Input [3]: [courseid#3L, coursename#5, sum#60]
+Keys [2]: [courseid#3L, coursename#5]
+Functions [1]: [sum(cast(sellmoney#22 as double))]
+Aggregate Attributes [1]: [sum(cast(sellmoney#22 as double))#55]
+Results [3]: [courseid#3L, coursename#5, sum(cast(sellmoney#22 as double))#55 AS totalsell#54]
+
+(11) AdaptiveSparkPlan
+Output [3]: [courseid#3L, coursename#5, totalsell#54]
+Arguments: isFinalPlan=false
